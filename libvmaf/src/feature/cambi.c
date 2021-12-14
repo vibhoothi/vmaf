@@ -809,7 +809,11 @@ static int dump_c_values(const float *c_values, int width, int height, int scale
 
     struct stat st = { 0 };
     if (stat(dir_path, &st) == -1) {
+#ifdef _WIN32
+        mkdir(dir_path);
+#else
         mkdir(dir_path, 0700);
+#endif
     }
 
     char path[1024];
