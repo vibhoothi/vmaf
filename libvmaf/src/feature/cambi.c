@@ -18,12 +18,14 @@
 
 #include <errno.h>
 #include <math.h>
+#include <sys/stat.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "common/macros.h"
 #include "feature_collector.h"
 #include "feature_extractor.h"
+#include "log.h"
 #include "mem.h"
 #include "picture.h"
 
@@ -38,9 +40,6 @@
 
 /* Max log contrast luma levels */
 #define DEFAULT_MAX_LOG_CONTRAST (2)
-
-/* Path to an existing directory where the heatmaps will be dumped. If null, the heatmaps will not be dumped to disk. */
-#define DEFAULT_CAMBI_HEATMAPS_PATH (NULL)
 
 #define CAMBI_MIN_WIDTH (320)
 #define CAMBI_MAX_WIDTH (4096)
@@ -73,12 +72,6 @@ static int *g_all_diffs;
         x = y;               \
         y = temp;            \
     }
-
-#ifdef _WIN32
-    #define PATH_SEPARATOR '\\'
-#else
-    #define PATH_SEPARATOR '/'
-#endif
 
 #define PICS_BUFFER_SIZE 2
 #define MASK_FILTER_SIZE 7
@@ -163,10 +156,10 @@ static const VmafOption options[] = {
     },
     {
         .name = "heatmaps_path",
-        .help = "Path to an existing directory where the heatmaps will be dumped. If null, the heatmaps will not be dumped to disk.",
+        .help = "Path where heatmaps will be dumped.",
         .offset = offsetof(CambiState, heatmaps_path),
         .type = VMAF_OPT_TYPE_STRING,
-        .default_val.s = DEFAULT_CAMBI_HEATMAPS_PATH,
+        .default_val.s = NULL,
     },
     { 0 }
 };
@@ -799,6 +792,12 @@ static void write_uint16(FILE *file, uint16_t v) {
     fwrite((void*)(&v), sizeof(v), 1, file);
 }
 
+#ifdef _WIN32
+    #define PATH_SEPARATOR '\\'
+#else
+    #define PATH_SEPARATOR '/'
+#endif
+
 static int dump_c_values(const float *c_values, int width, int height, int scale, 
                           int window_size, const char *dir_path, const uint16_t num_diffs) {
     int max_diff_weight = g_diffs_weights[0];
@@ -807,13 +806,23 @@ static int dump_c_values(const float *c_values, int width, int height, int scale
             max_diff_weight = g_diffs_weights[i];
         }
     }
+
+    struct stat st = { 0 };
+    if (stat(dir_path, &st) == -1) {
+        mkdir(dir_path, 0700);
+    }
+
     char path[1024];
     snprintf(path, sizeof(path), "%s%ccambi_heatmap_scale_%d_%dx%d_16b.gray", dir_path, PATH_SEPARATOR, scale, width, height);
     int max_c_value = max_diff_weight * window_size * window_size / 4;
     int max_16bit_value = (1 << 16) - 1;
     double scaling_value = (double)max_16bit_value / max_c_value;
     FILE *file = fopen(path, "a");
-    if (!file) return -EINVAL;
+    if (!file) {
+        vmaf_log(VMAF_LOG_LEVEL_ERROR,
+                 "cambi: could not open heatmaps_path: %s\n", path);
+        return -EINVAL;
+    }
     for (int i = 0; i < height; i++) {
         for (int j = 0; j < width; j++) {
             uint16_t val = (uint16_t)(scaling_value * c_values[i * width + j]);
